@@ -29,6 +29,7 @@ const [isExtracted, setIsExtracted] = useState(false); // ✅ new state
   deductibles: "",
   termsAndExclusions: ""
 });
+const [ocrUsed, setOcrUsed] = useState(false);
 
 
   const [confidenceScores, setConfidenceScores] = useState({
@@ -85,6 +86,7 @@ const handleExtract = () => {
     .then((data) => {
       setPdfId(data.pdf_id);
       setOriginalData(data);
+      setOcrUsed(data.ocr_used || false);
 
       setConfidenceScores({
         policyholderName: data.policyholderName_confidence,
@@ -398,12 +400,17 @@ const scrollToPage = (pageNum) => {
   >
     Save
   </button>
+
 </div>
   <div className="field">
     <label>Policyholder Name</label>
     <input
       value={formData.policyholderName}
-      onClick={() => scrollToTerm(formData.policyholderName)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.policyholderName_page || 1)
+          : scrollToTerm(formData.policyholderName)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, policyholderName: e.target.value }))
       }
@@ -418,7 +425,11 @@ const scrollToPage = (pageNum) => {
     <input
       type="date"
       value={formData.issueDate}
-      onClick={scrollToFirstDate}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.issueDate_page || 1)
+          : scrollToFirstDate()
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, issueDate: e.target.value }))
       }
@@ -433,8 +444,11 @@ const scrollToPage = (pageNum) => {
     <input
       type="date"
       value={formData.expirationDate}
-      onClick={scrollToExpirationDate}
-
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.expirationDate_page || 1)
+          : scrollToExpirationDate()
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, expirationDate: e.target.value }))
       }
@@ -448,7 +462,11 @@ const scrollToPage = (pageNum) => {
     <label>Provider Name</label>
     <input
       value={formData.providerName}
-      onClick={() => scrollToTerm(formData.providerName)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.providerName_page || 1)
+          : scrollToTerm(formData.providerName)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, providerName: e.target.value }))
       }
@@ -462,7 +480,11 @@ const scrollToPage = (pageNum) => {
     <label>Policyholder Address</label>
     <input
       value={formData.policyholderAddress}
-      onClick={() => scrollToTerm(formData.policyholderAddress)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.policyholderAddress_page || 1)
+          : scrollToTerm(formData.policyholderAddress)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, policyholderAddress: e.target.value }))
       }
@@ -476,7 +498,11 @@ const scrollToPage = (pageNum) => {
     <label>Policy Number</label>
     <input
       value={formData.policyNumber}
-      onClick={() => scrollToTerm(formData.policyNumber)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.policyNumber_page || 1)
+          : scrollToTerm(formData.policyNumber)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, policyNumber: e.target.value }))
       }
@@ -490,7 +516,11 @@ const scrollToPage = (pageNum) => {
     <label>Premium Amount</label>
     <input
       value={formData.premiumAmount}
-      onClick={() => scrollToTerm(formData.premiumAmount)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.premiumAmount_page || 1)
+          : scrollToTerm(formData.premiumAmount)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, premiumAmount: e.target.value }))
       }
@@ -504,7 +534,11 @@ const scrollToPage = (pageNum) => {
     <label>Deductibles & Premiums</label>
     <input
       value={formData.deductibles}
-      onClick={() => scrollToTerm(formData.deductibles)}
+      onClick={() =>
+        ocrUsed
+          ? scrollToPage(originalData.deductibles_page || 1)
+          : scrollToTerm(formData.deductibles)
+      }
       onChange={(e) =>
         setFormData((prev) => ({ ...prev, deductibles: e.target.value }))
       }
@@ -519,7 +553,11 @@ const scrollToPage = (pageNum) => {
     <textarea
       value={formData.termsAndExclusions}
       onClick={() =>
-        scrollToTerm(formData.termsAndExclusions.split(",")[0] || "")
+        ocrUsed
+          ? scrollToPage(
+              originalData.termsAndExclusions_page || 1
+            )
+          : scrollToTerm(formData.termsAndExclusions.split(",")[0] || "")
       }
       onChange={(e) =>
         setFormData((prev) => ({

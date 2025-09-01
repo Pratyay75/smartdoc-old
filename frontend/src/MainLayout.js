@@ -8,6 +8,8 @@ import ComparePage from "./components/ComparePage";
 import "./App.css";
 import "./HomePage.css";
 import MultiDocVoiceChat from "./components/MultiDocVoiceChat";
+import CompareSideBySide from "./components/CompareSideBySide";
+
 
 // NEW imports
 import ClassifyAndRoute from "./components/ClassifyAndRoute";
@@ -81,6 +83,8 @@ function MainLayout({ onLogout }) {
 
           {/* (Optional) Back-compat if anything still sets "classify" */}
           {activePage === "classify" && <ClassifyAndRoute />}
+          {activePage === "compare-side-by-side" && <CompareSideBySide />}
+
         </div>
       </div>
     </div>

@@ -132,36 +132,55 @@ def format_ai_data(ai_data):
         return ai_data
 
     except Exception as e:
-        logging.warning(f"⚠️ format_ai_data() failed: {e}")
+        logging.warning(f" format_ai_data() failed: {e}")
         return ai_data
 
 #-------------------------image to text -------------------------
-def extract_text_with_tesseract(file_path):
-    from pdf2image import convert_from_path
-    import pytesseract
-    from pytesseract import pytesseract as tesseract_cmd
+def extract_text_with_azure(file_path):
+    from azure.ai.formrecognizer import DocumentAnalysisClient
+    from azure.core.credentials import AzureKeyCredential
 
-    # ✅ Tell pytesseract where tesseract.exe is
-    tesseract_cmd.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    endpoint = os.getenv("AZURE_OCR_ENDPOINT")
+    key = os.getenv("AZURE_OCR_KEY")
+
+    document_analysis_client = DocumentAnalysisClient(
+        endpoint=endpoint, credential=AzureKeyCredential(key)
+    )
 
     try:
-        # ✅ Convert each page of PDF to image
-        images = convert_from_path(file_path, dpi=300, poppler_path=r"C:\poppler-24.08.0\Library\bin")
+        with open(file_path, "rb") as f:
+            poller = document_analysis_client.begin_analyze_document(
+                "prebuilt-layout",
+                document=f
+            )
+        result = poller.result()
+
         all_text = []
+        page_texts = {}
 
-        for img in images:
-            # ✅ OCR each image page
-            text = pytesseract.image_to_string(img)
-            all_text.append(text)
+        # Prefer paragraphs with page numbers
+        if hasattr(result, "paragraphs"):
+            for para in result.paragraphs:
+                if getattr(para, "confidence", 1.0) >= 0.6:
+                    all_text.append(para.content)
+                    if hasattr(para, "bounding_regions") and para.bounding_regions:
+                        page_num = para.bounding_regions[0].page_number
+                        page_texts.setdefault(page_num, []).append(para.content)
 
-        return "\n".join(all_text)
+        # Fallback: entire raw text
+        if not all_text and hasattr(result, "content"):
+            all_text.append(result.content)
+            page_texts[1] = [result.content]
+
+        return {
+            "full_text": "\n".join(all_text).strip(),
+            "pages": {p: " ".join(txts) for p, txts in page_texts.items()}
+        }
+
     except Exception as e:
-        logging.error(f"❌ Tesseract OCR failed: {e}")
-        return ""
+        logging.error(f"❌ Azure OCR failed: {e}")
+        return {"full_text": "", "pages": {}}
 
-
-
-# ------------------ PDF EXTRACTION ------------------
 # ------------------ PDF EXTRACTION ------------------
 @app.route("/extract", methods=["POST"])
 def extract_data():
@@ -177,13 +196,12 @@ def extract_data():
 
         filename = (file.filename or f"uploaded_{uuid.uuid4()}.pdf").replace(" ", "_")
 
-
-
         from azure.storage.blob import BlobServiceClient
         from io import BytesIO
 
         BLOB_CONN_STR = os.getenv("AZURE_BLOB_CONNECTION_STRING")
         BLOB_CONTAINER = os.getenv("AZURE_STORAGE_CONTAINER")
+
         blob_service = BlobServiceClient.from_connection_string(BLOB_CONN_STR)
         container_client = blob_service.get_container_client(BLOB_CONTAINER)
 
@@ -200,6 +218,7 @@ def extract_data():
         text = ""
         word_count = 0
         empty_pages = 0
+        page_map = {}
 
         pdf_file = fitz.open(stream=file_stream.read(), filetype="pdf")
 
@@ -221,75 +240,48 @@ def extract_data():
                 word_count += len(page_text.split())
 
         empty_ratio = empty_pages / page_count
+        ocr_used = False
 
         # OCR fallback
         if word_count < 30 or empty_ratio > 0.5:
             logging.warning(
-                f"⚠️ Detected scanned PDF (word_count={word_count}, empty_pages={empty_pages}/{page_count}) — using Tesseract OCR fallback."
+                f" Detected scanned PDF (word_count={word_count}, empty_pages={empty_pages}/{page_count}) — using Azure OCR fallback."
             )
             import tempfile
+            file_stream.seek(0)  # reset before saving
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(file_stream.getvalue())
+                tmp.write(file_stream.read())
                 tmp_path = tmp.name
-            text = extract_text_with_tesseract(tmp_path)
+
+            ocr_result = extract_text_with_azure(tmp_path)
+            text = ocr_result["full_text"]
+            page_map = ocr_result["pages"]
+            logging.info(" OCR Extracted Text:\n" + text[:1000])
             word_count = len(text.split())
+            ocr_used = True
 
-        # GPT prompt for structured data extraction
         prompt = f"""
-You are a professional document parser AI. Your task is to extract **structured information** from health insurance policy documents, regardless of how messy or inconsistent the text may be.
+        You are a professional document parser AI. Your task is to extract **structured information** 
+        from health insurance policy documents, regardless of how messy or inconsistent the text may be. 
+        Use the following schema to return the extracted data as pure JSON only (no extra text):
 
-Use the following schema to return the extracted data as pure JSON only (no extra text):
+        {{
+            "policyholderName": {{ "value": string | null, "confidence": integer }},
+            "issueDateRaw": string | null,
+            "issueDate": {{ "value": string | null, "confidence": integer }},
+            "expirationDateRaw": string | null,
+            "expirationDate": {{ "value": string | null, "confidence": integer }},
+            "providerName": {{ "value": string | null, "confidence": integer }},
+            "policyholderAddress": {{ "value": string | null, "confidence": integer }},
+            "policyNumber": {{ "value": string | null, "confidence": integer }},
+            "premiumAmount": {{ "value": string | null, "confidence": integer }},
+            "deductibles": {{ "value": string | null, "confidence": integer }},
+            "termsAndExclusions": list of strings | null
+        }}
 
-{{
-  "policyholderName": {{ "value": string | null, "confidence": integer }},
-  "issueDateRaw": string | null,
-  "issueDate": {{ "value": string | null, "confidence": integer }},
-  "expirationDateRaw": string | null,
-  "expirationDate": {{ "value": string | null, "confidence": integer }},
-  "providerName": {{ "value": string | null, "confidence": integer }},
-  "policyholderAddress": {{ "value": string | null, "confidence": integer }},
-  "policyNumber": {{ "value": string | null, "confidence": integer }},
-  "premiumAmount": {{ "value": string | null, "confidence": integer }},
-  "deductibles": {{ "value": string | null, "confidence": integer }},
-  "termsAndExclusions": list of strings | null
-}}
-
-📌 **Instructions for Fields**:
-- **policyholderName**: Extract the full name of the insured person (or entity) — avoid nicknames or initials unless that's all that's available.
-- **issueDateRaw**: The exact string as shown in the document (e.g., "15th June 2024").
-- **issueDate**: Convert issueDateRaw into `"DD-MM-YYYY"` format. Use best guess if ambiguous.
-- **expirationDateRaw** and **expirationDate**: Same rules as above.
-- **providerName**: Company or organization issuing the policy (e.g., "Star Health", "LIC", "HDFC Ergo").
-- **policyholderAddress**: Full address if present, partial if not complete.
-- **policyNumber**: Any unique alphanumeric string representing the policy.
-- **premiumAmount**:
-    - This refers to the **Sum Assured** — the total amount of coverage or the maturity payout.
-    - If multiple monetary amounts exist, prefer the largest one explicitly labeled "Sum Assured", "Total Benefit", or similar.
-    - Format as-is (e.g., "Rs. 5,00,000", "$50,000").
-- **deductibles**:
-    - This refers to **recurring premium payments** (weekly, monthly, quarterly, annually).
-    - Prioritize values labeled as **"Premium Frequency"**, **"Recurring Premium"**, or similarly.
-    - Format as-is (e.g., "Rs. 2,500 monthly", "$100 quarterly").
-- **termsAndExclusions**:
-    - Extract any bullet points, clauses, or lines indicating what is **excluded from coverage** or under what **conditions claims may be denied**.
-    - Return as a **list of individual strings**.
-
-🎯 **Output Format Rules**:
-- Return ONLY valid JSON — no extra text, no explanation.
-- Every key listed above must be present. Use `null` for values not found.
-- For any extracted field, estimate a **confidence score from 0 to 100** based on clarity, keyword match, and certainty.
-- Avoid placeholders like "N/A", "Not Found", or "Unavailable" — just use `null`.
-
-🧠 **Extra Context**:
-- This document might be scanned or unstructured.
-- Be resilient to typos, poor formatting, or OCR noise.
-- If a field seems partially matched, still attempt to extract it with lower confidence.
-
-📝 Here is the text to extract from:
-{text}
-"""
-
-
+        ... Here is the text to extract from:
+        {text}
+        """
 
         response = client_azure.chat.completions.create(
             model=DEPLOYMENT_NAME,
@@ -304,7 +296,7 @@ Use the following schema to return the extracted data as pure JSON only (no extr
 
         # Clean JSON
         import re
-        cleaned = re.sub(r"^```(?:json)?|```$", "", extracted_data.strip(), flags=re.MULTILINE).strip()
+        cleaned = re.sub(r"^(?:```json)?|```$", "", extracted_data.strip(), flags=re.MULTILINE).strip()
         match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         cleaned = match.group(0) if match else extracted_data
 
@@ -332,12 +324,8 @@ Use the following schema to return the extracted data as pure JSON only (no extr
                 "deductibles_confidence": parsed_data.get("deductibles", {}).get("confidence", 0),
                 "termsAndExclusions": parsed_data.get("termsAndExclusions"),
             }
-            # Always extract Premium from the Policy Schedule line explicitly
-            import re
 
-# 👇 Fallback logic if GPT misses the values
-
-# Premium Amount (Total Sum Assured or Maturity)
+            # Fallback regex logic
             if not flattened.get("premiumAmount"):
                 match = re.search(
                     r"(sum assured|total benefit|maturity amount)[^\n]*?(Rs\.?\s*[\d,]+)",
@@ -348,7 +336,6 @@ Use the following schema to return the extracted data as pure JSON only (no extr
                     flattened["premiumAmount"] = match.group(2).strip()
                     flattened["premiumAmount_confidence"] = 75
 
-# Deductibles (Recurring Premiums)
             if not flattened.get("deductibles"):
                 match = re.search(
                     r"(premium(?: per| payable)?(?:.*)?)[^\n]*?(Rs\.?\s*[\d,]+\s*(?:monthly|quarterly|annually|yearly)?)",
@@ -358,8 +345,6 @@ Use the following schema to return the extracted data as pure JSON only (no extr
                 if match:
                     flattened["deductibles"] = match.group(2).strip()
                     flattened["deductibles_confidence"] = 70
-
-
 
             # Format extracted dates to DD-MM-YYYY
             for field in ["issueDate", "expirationDate"]:
@@ -372,16 +357,34 @@ Use the following schema to return the extracted data as pure JSON only (no extr
 
             parsed_data = format_ai_data(flattened)
 
+            # ---------- NEW: field → page mapping ----------
+            field_page_map = {}
+
+            def find_page_for_value(val):
+                if not val or not page_map:
+                    return None
+                val_lower = val.lower()
+                for p, ptext in page_map.items():
+                    if val_lower in ptext.lower():
+                        return p
+                return None
+
+            for key in ["policyholderName", "providerName", "policyNumber", "premiumAmount", "deductibles", "policyholderAddress"]:
+                field_page_map[f"{key}_page"] = find_page_for_value(flattened.get(key))
+
+            field_page_map["issueDate_page"] = find_page_for_value(flattened.get("issueDateRaw"))
+            field_page_map["expirationDate_page"] = find_page_for_value(flattened.get("expirationDateRaw"))
+
         except json.JSONDecodeError:
             logging.error(f"⚠️ Invalid JSON from model: {cleaned}")
             parsed_data = {"raw_output": extracted_data}
+            field_page_map = {}
 
         # Save to MongoDB
         user_id = request.form.get("user_id")
         if not user_id:
             return jsonify({"error": "Missing user_id in form data"}), 400
 
-        user_id = request.form.get("user_id")
         pdf_collection.insert_one({
             "pdf_id": pdf_id,
             "pdfName": filename,
@@ -392,7 +395,12 @@ Use the following schema to return the extracted data as pure JSON only (no extr
             "user_id": user_id
         })
 
-        return jsonify({"pdf_id": pdf_id, **parsed_data})
+        return jsonify({
+            "pdf_id": pdf_id,
+            "ocr_used": ocr_used,
+            **parsed_data,
+            **field_page_map
+        })
 
     except Exception as e:
         logging.error(f"❌ Error during extraction: {str(e)}")
@@ -1447,11 +1455,93 @@ def delete_category():
 
     return jsonify({"message": f"Category '{name}' deleted successfully"})
 
+from flask import Flask, request, jsonify
+import fitz  # PyMuPDF
+import io
+
+
+def highlight_mismatches(doc, mismatches, pdf_id):
+    """Add highlights to the given doc based on mismatches list."""
+    for m in mismatches:
+        if pdf_id not in m:
+            continue
+        w = m[pdf_id]
+        page = doc[w["page"] - 1]
+        rect = fitz.Rect(w["bbox"])
+        highlight = page.add_highlight_annot(rect)
+        highlight.set_colors(stroke=(1, 0, 0) if pdf_id == "pdf1" else (1, 1, 0))
+        highlight.update()
+    return doc
+
+@app.route("/compare-sbs", methods=["POST"])
+def compare_pdfs_sbs():
+    if "file1" not in request.files or "file2" not in request.files:
+        return jsonify({"error": "Upload both PDFs"}), 400
+
+    pdf1 = request.files["file1"]
+    pdf2 = request.files["file2"]
+
+    doc1 = fitz.open(stream=pdf1.read(), filetype="pdf")
+    pdf2.stream.seek(0)
+    doc2 = fitz.open(stream=pdf2.read(), filetype="pdf")
+
+    words1 = []
+    words2 = []
+
+    # Extract words
+    for page_num, page in enumerate(doc1, start=1):
+        for w in page.get_text("words"):
+            words1.append({"page": page_num, "word": w[4], "bbox": w[:4]})
+
+    for page_num, page in enumerate(doc2, start=1):
+        for w in page.get_text("words"):
+            words2.append({"page": page_num, "word": w[4], "bbox": w[:4]})
+
+    mismatches = []
+
+    # Group by page and compare word sets
+    pages = max(
+        max(w["page"] for w in words1) if words1 else 0,
+        max(w["page"] for w in words2) if words2 else 0,
+    )
+    for page in range(1, pages + 1):
+        w1_page = [w for w in words1 if w["page"] == page]
+        w2_page = [w for w in words2 if w["page"] == page]
+
+        words1_set = {w["word"] for w in w1_page}
+        words2_set = {w["word"] for w in w2_page}
+
+        # Words unique to each PDF
+        only_in_1 = [w for w in w1_page if w["word"] not in words2_set]
+        only_in_2 = [w for w in w2_page if w["word"] not in words1_set]
+
+        for w in only_in_1:
+            mismatches.append({"pdf1": w})
+        for w in only_in_2:
+            mismatches.append({"pdf2": w})
+
+    # Highlight mismatches in both PDFs
+    highlight_mismatches(doc1, mismatches, "pdf1")
+    highlight_mismatches(doc2, mismatches, "pdf2")
+
+    # Save to memory
+    buf1 = io.BytesIO()
+    buf2 = io.BytesIO()
+    doc1.save(buf1)
+    doc2.save(buf2)
+    buf1.seek(0)
+    buf2.seek(0)
+
+    return {
+        "pdf1": buf1.getvalue().decode("latin1"),
+        "pdf2": buf2.getvalue().decode("latin1"),
+    }
+
 @app.route("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
 # ------------------ START SERVER ------------------
-#if __name__ == "__main__": 
- #   app.run(debug=True)
+if __name__ == "__main__": 
+    app.run(debug=True)
