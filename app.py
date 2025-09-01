@@ -1469,7 +1469,7 @@ def highlight_mismatches(doc, mismatches, pdf_id):
         page = doc[w["page"] - 1]
         rect = fitz.Rect(w["bbox"])
         highlight = page.add_highlight_annot(rect)
-        highlight.set_colors(stroke=(1, 0, 0) if pdf_id == "pdf1" else (1, 0.8, 0.8))
+        highlight.set_colors(stroke=(1, 0.6, 0.6) if pdf_id == "pdf1" else (1, 1, 0))
         highlight.update()
     return doc
 
