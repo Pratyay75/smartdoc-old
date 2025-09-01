@@ -19,7 +19,7 @@ import {
 function Sidebar({ onNavigate, sidebarOpen, setSidebarOpen }) {
   const sidebarRef = useRef(null);
   const [classifyOpen, setClassifyOpen] = useState(true);
-  const [compareOpen, setCompareOpen] = useState(true);
+  const [compareOpen, setCompareOpen] = useState(true);   
 
   const handleToggle = () => {
     setSidebarOpen(!sidebarOpen);
