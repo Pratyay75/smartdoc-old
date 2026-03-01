@@ -13,7 +13,7 @@ import fitz  # PyMuPDF
 from dateutil import parser as dateparser
 from openai import AzureOpenAI
 import requests
-from Analytics import (
+from Analytics import ( 
     calculate_analytics,
 )
 from ingest_pdf import push_chunks_to_search, extract_chunks
