@@ -18,7 +18,7 @@ from Analytics import (
 )
 from ingest_pdf import push_chunks_to_search, extract_chunks
 # ------------------ CONFIG ------------------
-load_dotenv()
+load_dotenv() 
 
 app = Flask(__name__, static_folder="frontend/build", static_url_path="")
 
